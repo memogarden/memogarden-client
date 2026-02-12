@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "memogarden-client"
+version = "0.1.0"
+description = "Python SDK for MemoGarden API"
+authors = ["MemoGarden Project"]
+readme = "README.md"
+packages = [{include = "mg_client"}]
+
+[tool.poetry.dependencies]
+python = "^3.13"
+httpx = "^0.27.0"
+pydantic = "^2.9.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-asyncio = "^0.23.0"
+pytest-mock = "^3.12.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
