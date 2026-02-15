@@ -20,6 +20,7 @@ Example:
 from mg_client.client import MemoGardenClient, SyncMemoGardenClient
 from mg_client.semantic import SemanticAPI
 from mg_client.auth import AuthManager
+from mg_client.sse import SSESubscription, connect_sse, SSEEvent
 from mg_client.exceptions import (
     MemoGardenClientError,
     AuthenticationError,
@@ -31,12 +32,15 @@ from mg_client.exceptions import (
     InternalServerError,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "MemoGardenClient",
     "SyncMemoGardenClient",
     "SemanticAPI",
     "AuthManager",
+    "SSESubscription",
+    "connect_sse",
+    "SSEEvent",
     "MemoGardenClientError",
     "AuthenticationError",
     "ResourceNotFoundError",

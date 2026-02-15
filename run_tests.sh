@@ -40,6 +40,15 @@ export DEPENDENCY_CHECK=""
 # Optional: Additional environment variables for tests
 # export MY_VAR="value"
 
+# IMPORTANT: Clear any stale VIRTUAL_ENV set by VSCode's Python extension
+# The extension may cache interpreter paths that point to non-existent directories
+# See: docs/history/test-runner-failure-investigation-2026-02-14.md
+unset VIRTUAL_ENV
+
+# Then set VIRTUAL_ENV to the correct project-local .venv path
+# This ensures Poetry uses the right virtualenv for this project
+export VIRTUAL_ENV="/home/kureshii/memogarden/memogarden-client/.venv"
+
 # ============================================================================
 # PARSE SCRIPT OPTIONS
 # ============================================================================
@@ -63,9 +72,22 @@ done
 # INVOKE CENTRALIZED ENTRYPOINT
 # ============================================================================
 
-# Change to this script's directory before calling entrypoint
+# Get this script's directory before changing directories
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Find MemoGarden root: go up two levels from subproject directory
+MG_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Validate we're in the right place (should end with "memogarden")
+if [[ ! "$MG_ROOT" =~ memogarden$ ]]; then
+    echo "ERROR: Unexpected project root: $MG_ROOT" >&2
+    echo "Path should end with 'memogarden'" >&2
+    exit 1
+fi
+
+# Change to subproject directory before calling entrypoint
 # This ensures poetry finds the correct pyproject.toml
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$SCRIPT_DIR"
 
 # Call the centralized test entrypoint with all arguments
-exec /workspaces/memogarden/scripts/test_entrypoint.sh "${PYTEST_ARGS[@]}"
+exec "$MG_ROOT/scripts/test_entrypoint.sh" "${PYTEST_ARGS[@]}"
