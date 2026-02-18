@@ -63,7 +63,7 @@ class SSESubscription:
     _running: bool = field(default=False, init=False)
 
     # Event listeners by type
-    _listeners: dict[str, list[Callable[[SSEEvent], Awaitable[None]]] = field(
+    _listeners: dict[str, list[Callable[[SSEEvent], Awaitable[None]]]] = field(
         default_factory=dict, init=False, repr=False
     )
 
