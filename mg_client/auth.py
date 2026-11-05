@@ -19,8 +19,8 @@ class AuthManager:
     Example:
         >>> auth = AuthManager(api_key="mg_sk_agent_abc123...")
         >>> headers = auth.get_headers()
-        >>> headers["Authorization"]
-        'Bearer mg_sk_agent_abc123...'
+        >>> headers["X-API-Key"]
+        'mg_sk_agent_abc123...'
     """
 
     def __init__(
@@ -51,16 +51,21 @@ class AuthManager:
     def get_headers(self) -> dict[str, str]:
         """Get authorization headers for API requests.
 
+        API keys (mg_sk_*) are sent via the X-API-Key header — the server
+        validates Bearer tokens as JWT only and never falls through to its
+        API-key check, so an mg_sk_ key in the Bearer header is rejected as
+        an invalid JWT.
+
         Returns:
-            Dict with Authorization header
+            Dict with X-API-Key header
 
         Example:
             >>> auth = AuthManager(api_key="mg_sk_agent_abc123...")
             >>> auth.get_headers()
-            {'Authorization': 'Bearer mg_sk_agent_abc123...'}
+            {'X-API-Key': 'mg_sk_agent_abc123...'}
         """
         if self.auth_type == "api_key":
-            return {"Authorization": f"Bearer {self.api_key}"}
+            return {"X-API-Key": self.api_key}
         return {}
 
     def get_auth_string(self) -> str:
