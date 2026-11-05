@@ -22,3 +22,6 @@ asyncio_mode = "auto"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+memogarden = "mg_client.cli:main"

@@ -9,6 +9,7 @@ from typing import Any, Literal
 import httpx
 
 from mg_client.auth import AuthManager
+from mg_client.providers import ProviderAPI
 from mg_client.semantic import SemanticAPI
 
 
@@ -73,6 +74,11 @@ class MemoGardenClient:
 
         # Initialize API wrappers
         self.semantic = SemanticAPI(
+            base_url=self.base_url,
+            auth=self.auth,
+            timeout=timeout,
+        ) if self.auth else None
+        self.providers = ProviderAPI(
             base_url=self.base_url,
             auth=self.auth,
             timeout=timeout,
