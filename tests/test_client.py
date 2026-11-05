@@ -38,7 +38,7 @@ class TestAuthManager:
         """Test getting authorization headers."""
         auth = AuthManager(api_key="mg_sk_agent_abc123")
         headers = auth.get_headers()
-        assert headers == {"Authorization": "Bearer mg_sk_agent_abc123"}
+        assert headers == {"X-API-Key": "mg_sk_agent_abc123"}
 
     def test_get_auth_string(self):
         """Test getting safe auth string for display."""
