@@ -69,6 +69,39 @@ with SyncMemoGardenClient(
     print(f"Created scope: {scope['uuid']}")
 ```
 
+## CLI
+
+The package installs a `memogarden` command — a thin authenticated client of
+the API, using a verb-first grammar that mirrors the RFC-005 semantic verbs.
+
+Connection settings come from flags or the environment:
+
+```bash
+export MEMOGARDEN_URL=http://localhost:8600
+export MEMOGARDEN_API_KEY=mg_sk_agent_...
+```
+
+Register a data provider (server-side registry, RFC-004 §12.2; requires the
+`POST /api/v1/providers` endpoint on the server):
+
+```bash
+# Field flags
+memogarden register provider \
+    --name gmail \
+    --module gmail_importer.provider \
+    --class GmailProvider \
+    --interval 3600 \
+    --config batch_limit=1000
+
+# Or a JSON payload file / stdin
+memogarden register provider --file payload.json
+cat payload.json | memogarden register provider --file -
+```
+
+On success the stored manifest is printed as JSON (including server-assigned
+fields such as `capabilities`, `registered_at`, `next_due_at`). Exit codes:
+0 success, 1 error, 2 usage error.
+
 ## Testing
 
 Run tests:
@@ -91,6 +124,8 @@ mg_client/
 ├── __init__.py      # Package exports
 ├── client.py        # Main MemoGardenClient class
 ├── semantic.py      # SemanticAPI wrapper
+├── providers.py     # ProviderAPI wrapper (/api/v1/providers)
+├── cli.py           # memogarden CLI entry point
 ├── auth.py          # AuthManager for API key auth
 ├── models.py        # Pydantic request/response models
 └── exceptions.py    # Client exception classes
