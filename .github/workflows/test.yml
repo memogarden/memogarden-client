@@ -25,7 +25,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          cache: 'poetry'
+          # No poetry cache: poetry.lock is deliberately gitignored (library
+          # repo — deps resolve from pyproject), so the lock-based cache
+          # prerequisite can never match.
 
       - name: Install dependencies
         run: poetry install --with dev
