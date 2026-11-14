@@ -4,7 +4,11 @@ Thin authenticated client of the MemoGarden API — the CLI has the same
 relationship to the server as every other client. Grammar is verb-first,
 mirroring the RFC-005 semantic verbs: `memogarden <verb> <noun> ...`.
 
-Currently supported: `memogarden register provider` (RFC-004 §12.2).
+Supported:
+    memogarden register provider   (RFC-004 §12.2)
+    memogarden register account    (RFC-012 §6.2)
+    memogarden list accounts
+    memogarden show|verify|remove|run account
 
 Connection settings come from --url/--api-key flags or the
 MEMOGARDEN_URL / MEMOGARDEN_API_KEY environment variables.
@@ -21,6 +25,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from mg_client.accounts import AccountAPI, RegisterAccountRequest
 from mg_client.auth import AuthManager
 from mg_client.exceptions import MemoGardenClientError
 from mg_client.providers import ProviderAPI, RegisterProviderRequest
@@ -29,6 +34,9 @@ from mg_client.providers import ProviderAPI, RegisterProviderRequest
 # Top-level request fields accepted by POST /api/v1/providers (RFC-004 §12.2)
 _ALLOWED_FIELDS = {"name", "module", "class", "interval", "enabled", "description", "config"}
 _REQUIRED_FIELDS = ("name", "module", "class")
+
+# Default platform per provider (RFC-012 §6.2); --platform overrides.
+_PROVIDER_PLATFORMS = {"gmail": "google"}
 
 
 class CliError(Exception):
@@ -84,6 +92,61 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help="Provider config entry; VALUE parsed as JSON when possible, else string. Repeatable",
     )
+
+    # ------------------------------------------------------------------
+    # RFC-012 §6.2: provider accounts
+    # ------------------------------------------------------------------
+
+    register_account = register_sub.add_parser(
+        "account",
+        help=(
+            "Bind an upstream account to a provider (POST .../accounts). "
+            "The OAuth consent itself happens in the provider's own CLI "
+            "(python -m gmail_importer.ingest auth-login --register) — this "
+            "records/repairs the registry row and never sees tokens"
+        ),
+    )
+    ra_fields = register_account.add_argument_group("field flags")
+    ra_fields.add_argument("--provider", required=True, help="Registry slug, e.g. gmail")
+    ra_fields.add_argument("--account", required=True, help="Upstream identity (email/username)")
+    ra_fields.add_argument("--label", help="Operator nickname, e.g. work")
+    ra_fields.add_argument(
+        "--platform",
+        help=f"Identity platform (default: {_PROVIDER_PLATFORMS})",
+    )
+    ra_fields.add_argument(
+        "--credential-ref",
+        help="HACM credential id (default: <platform>:<account>)",
+    )
+    ra_fields.add_argument(
+        "--config",
+        action="append",
+        metavar="KEY=VALUE",
+        help="Per-account config entry; repeatable",
+    )
+
+    list_ = sub.add_parser("list", help="List a resource")
+    list_sub = list_.add_subparsers(dest="resource", required=True)
+    list_accounts = list_sub.add_parser(
+        "accounts", help="List a provider's accounts"
+    )
+    list_accounts.add_argument("--provider", required=True, help="Registry slug")
+
+    for verb, help_text in (
+        ("show", "Show one account manifest"),
+        ("verify", "Probe an account's credential health (re-activates on success)"),
+        ("remove", "Delete an account binding (HACM credential is untouched)"),
+        ("run", "Trigger a run for one account"),
+    ):
+        verb_parser = sub.add_parser(verb, help=help_text)
+        verb_sub = verb_parser.add_subparsers(dest="resource", required=True)
+        account_parser = verb_sub.add_parser("account", help=help_text)
+        account_parser.add_argument("--provider", required=True, help="Registry slug")
+        target = account_parser.add_mutually_exclusive_group(required=True)
+        target.add_argument("--id", help="Account id (uuid)")
+        target.add_argument("--label", help="Resolve by operator label")
+        target.add_argument("--subject", help="Resolve by upstream identity (email)")
+
     return parser
 
 
@@ -169,6 +232,54 @@ def _read_file(path: str) -> str:
         raise CliError(f"cannot read {path}: {e}") from e
 
 
+def account_payload(args: argparse.Namespace) -> dict[str, Any]:
+    """Build the account registration payload from CLI arguments."""
+    platform = args.platform or _PROVIDER_PLATFORMS.get(args.provider)
+    if not platform:
+        raise CliError(
+            f"no default platform for provider '{args.provider}' — pass --platform"
+        )
+    payload: dict[str, Any] = {
+        "platform": platform,
+        "subject": args.account,
+    }
+    if args.label is not None:
+        payload["label"] = args.label
+    if args.credential_ref is not None:
+        payload["credential_ref"] = args.credential_ref
+    config: dict[str, Any] = {}
+    for item in args.config or []:
+        if "=" not in item:
+            raise CliError(f"--config expects KEY=VALUE, got: {item}")
+        key, value = item.split("=", 1)
+        config[key] = _config_value(value)
+    if config:
+        payload["config"] = config
+    return payload
+
+
+async def _resolve_account_target(
+    api: AccountAPI, provider: str, args: argparse.Namespace
+) -> str:
+    """Resolve --id directly, or --label/--subject through a listing."""
+    if args.id:
+        return args.id
+    field = "label" if args.label else "subject"
+    wanted = args.label or args.subject
+    accounts = await api.list(provider)
+    matches = [a for a in accounts if (a.get(field) or "").lower() == wanted.lower()]
+    if not matches:
+        raise CliError(
+            f"no account with {field} '{wanted}' under provider '{provider}'"
+        )
+    if len(matches) > 1:
+        ids = ", ".join(a["id"] for a in matches)
+        raise CliError(
+            f"{field} '{wanted}' is ambiguous ({ids}) — pass --id explicitly"
+        )
+    return matches[0]["id"]
+
+
 def _resolve_connection(args: argparse.Namespace) -> tuple[str, str]:
     """Resolve API URL and API key from flags or environment."""
     url = args.url or os.environ.get("MEMOGARDEN_URL")
@@ -184,6 +295,35 @@ async def _register_provider(url: str, api_key: str, payload: dict[str, Any]) ->
     """Send the registration request to the server."""
     api = ProviderAPI(url, AuthManager(api_key=api_key))
     return await api.register(RegisterProviderRequest(**payload))
+
+
+async def _register_account(url: str, api_key: str, provider: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Send the account registration request to the server (RFC-012)."""
+    api = AccountAPI(url, AuthManager(api_key=api_key))
+    return await api.register(provider, RegisterAccountRequest(**payload))
+
+
+async def _list_accounts(url: str, api_key: str, provider: str) -> list[dict[str, Any]]:
+    api = AccountAPI(url, AuthManager(api_key=api_key))
+    return await api.list(provider)
+
+
+async def _account_action(
+    url: str, api_key: str, provider: str, args: argparse.Namespace, action: str
+) -> dict[str, Any] | None:
+    """Resolve the account target and perform show/verify/remove/run."""
+    api = AccountAPI(url, AuthManager(api_key=api_key))
+    account_id = await _resolve_account_target(api, provider, args)
+    if action == "show":
+        return await api.get(provider, account_id)
+    if action == "verify":
+        return await api.verify(provider, account_id)
+    if action == "run":
+        return await api.run(provider, account_id)
+    if action == "remove":
+        await api.remove(provider, account_id)
+        return {"removed": account_id, "provider": provider}
+    raise CliError(f"unsupported action: {action}")  # pragma: no cover
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -208,6 +348,36 @@ def main(argv: list[str] | None = None) -> int:
                 raise CliError(f"invalid registration payload: {e}") from e
             print(json.dumps(result, indent=2))
             return 0
+
+        if args.command == "register" and args.resource == "account":
+            payload = account_payload(args)
+            url, api_key = _resolve_connection(args)
+            try:
+                result = asyncio.run(
+                    _register_account(url, api_key, args.provider, payload)
+                )
+            except ValidationError as e:
+                raise CliError(f"invalid account payload: {e}") from e
+            print(json.dumps(result, indent=2))
+            return 0
+
+        if args.command == "list" and args.resource == "accounts":
+            url, api_key = _resolve_connection(args)
+            accounts = asyncio.run(_list_accounts(url, api_key, args.provider))
+            print(json.dumps({"accounts": accounts, "count": len(accounts)}, indent=2))
+            return 0
+
+        if (
+            args.command in ("show", "verify", "remove", "run")
+            and args.resource == "account"
+        ):
+            url, api_key = _resolve_connection(args)
+            result = asyncio.run(
+                _account_action(url, api_key, args.provider, args, args.command)
+            )
+            print(json.dumps(result, indent=2))
+            return 0
+
         parser.error(f"unsupported command: {args.command} {getattr(args, 'resource', '')}")
         return 2  # pragma: no cover - parser.error exits
 
