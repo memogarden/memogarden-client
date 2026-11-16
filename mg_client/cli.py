@@ -9,6 +9,7 @@ Supported:
     memogarden register account    (RFC-012 §6.2)
     memogarden list accounts
     memogarden show|verify|remove|run account
+    memogarden import opml         (RSS/Atom subscriptions from OPML)
 
 Connection settings come from --url/--api-key flags or the
 MEMOGARDEN_URL / MEMOGARDEN_API_KEY environment variables.
@@ -18,9 +19,11 @@ Exit codes: 0 success, 1 error, 2 usage error (argparse).
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
@@ -28,7 +31,9 @@ from pydantic import ValidationError
 from mg_client.accounts import AccountAPI, RegisterAccountRequest
 from mg_client.auth import AuthManager
 from mg_client.exceptions import MemoGardenClientError
+from mg_client.opml import OPMLParseError, parse_opml
 from mg_client.providers import ProviderAPI, RegisterProviderRequest
+from mg_client.semantic import SemanticAPI
 
 
 # Top-level request fields accepted by POST /api/v1/providers (RFC-004 §12.2)
@@ -146,6 +151,26 @@ def build_parser() -> argparse.ArgumentParser:
         target.add_argument("--id", help="Account id (uuid)")
         target.add_argument("--label", help="Resolve by operator label")
         target.add_argument("--subject", help="Resolve by upstream identity (email)")
+
+    # ------------------------------------------------------------------
+    # Imports
+    # ------------------------------------------------------------------
+
+    import_ = sub.add_parser("import", help="Import a resource into memogarden")
+    import_sub = import_.add_subparsers(dest="resource", required=True)
+    opml = import_sub.add_parser(
+        "opml",
+        help=(
+            "Import feed subscriptions from an OPML file as Subscription "
+            "facts (idempotent on xml_url — re-import skips what exists)"
+        ),
+    )
+    opml.add_argument("--file", required=True, help="OPML file path ('-' for stdin)")
+    opml.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and report what would be imported without creating facts",
+    )
 
     return parser
 
@@ -291,6 +316,86 @@ def _resolve_connection(args: argparse.Namespace) -> tuple[str, str]:
     return url, api_key
 
 
+def _feed_key(xml_url: str) -> str:
+    """First 8 hex of SHA-256 of the feed URL — the tag the provider's
+    User-Agent carries so a publisher can correspond about one feed
+    (schemas/subscription.yaml; the provider recomputes it independently,
+    this copy just stamps the fact)."""
+    return hashlib.sha256(xml_url.encode("utf-8")).hexdigest()[:8]
+
+
+async def _import_opml(
+    url: str, api_key: str, path: str, dry_run: bool
+) -> dict[str, Any]:
+    """Import OPML subscriptions as Subscription facts (idempotent on
+    xml_url: existing subscriptions are skipped, so re-import is safe)."""
+    text = sys.stdin.read() if path == "-" else _read_file(path)
+    try:
+        feeds = parse_opml(text)
+    except OPMLParseError as e:
+        raise CliError(f"cannot parse OPML: {e}") from e
+
+    existing: set[Any] = set()
+    api = SemanticAPI(url, AuthManager(api_key=api_key))
+    if not dry_run:
+        # idempotency probe: page through existing Subscription facts
+        start = 0
+        while True:
+            page = await api.query(
+                type="Subscription", target_type="fact", count=100, start_index=start
+            )
+            results = page.get("results", [])
+            existing |= {
+                (row.get("data") or {}).get("xml_url") for row in results
+            }
+            start += len(results)
+            if not results or start >= int(page.get("total") or 0):
+                break
+
+    now = datetime.now(UTC).isoformat()
+    added: list[str] = []
+    skipped: list[str] = []
+    for feed in feeds:
+        if feed.xml_url in existing:
+            skipped.append(feed.xml_url)
+            continue
+        if not dry_run:
+            data: dict[str, Any] = {"xml_url": feed.xml_url}
+            if feed.title:
+                data["title"] = feed.title
+            if feed.html_url:
+                data["html_url"] = feed.html_url
+            if feed.categories:
+                data["categories"] = feed.categories
+            await api.add(
+                type="Subscription",
+                data=data,
+                metadata={
+                    "source": "opml",
+                    "imported_at": now,
+                    "feed_key": _feed_key(feed.xml_url),
+                },
+                canonical_at=now,
+            )
+        added.append(feed.xml_url)
+
+    summary: dict[str, Any] = {
+        "file": path,
+        "found": len(feeds),
+        "dry_run": dry_run,
+    }
+    if dry_run:
+        summary["would_add"] = len(added)
+        summary["already_present"] = len(skipped)
+    else:
+        summary["added"] = len(added)
+        summary["skipped"] = len(skipped)
+    summary["feeds"] = added if dry_run or added else []
+    if skipped:
+        summary["skipped_feeds"] = skipped
+    return summary
+
+
 async def _register_provider(url: str, api_key: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Send the registration request to the server."""
     api = ProviderAPI(url, AuthManager(api_key=api_key))
@@ -374,6 +479,14 @@ def main(argv: list[str] | None = None) -> int:
             url, api_key = _resolve_connection(args)
             result = asyncio.run(
                 _account_action(url, api_key, args.provider, args, args.command)
+            )
+            print(json.dumps(result, indent=2))
+            return 0
+
+        if args.command == "import" and args.resource == "opml":
+            url, api_key = _resolve_connection(args)
+            result = asyncio.run(
+                _import_opml(url, api_key, args.file, args.dry_run)
             )
             print(json.dumps(result, indent=2))
             return 0
