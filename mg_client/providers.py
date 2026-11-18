@@ -121,7 +121,7 @@ class ProviderAPI:
         account_id: str | None = None,
         status: str | None = None,
         limit: int | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> "list[dict[str, Any]]":
         """List recent runs for a provider, newest first (RFC-015 §3.2)."""
         params: list[str] = []
         if account_id is not None:
