@@ -540,6 +540,20 @@ def _resolve_connection(args: argparse.Namespace) -> tuple[str, str]:
     return url, api_key
 
 
+def _resolve_principal(args: argparse.Namespace) -> tuple[str, AuthManager]:
+    """API key when present, else the operator JWT session.
+
+    Tier-2 endpoints (providers, accounts, runs reads) accept any
+    authenticated principal — the CLI prefers the agent transport and
+    falls back to the login session so an operator never needs an agent
+    key for provider ops.
+    """
+    if args.api_key or os.environ.get("MEMOGARDEN_API_KEY"):
+        url, api_key = _resolve_connection(args)
+        return url, AuthManager(api_key=api_key)
+    return _resolve_jwt_auth(args)
+
+
 def _resolve_jwt_auth(args: argparse.Namespace) -> tuple[str, AuthManager]:
     """Resolve URL + JWT AuthManager (flags > MEMOGARDEN_JWT > session file).
 
@@ -652,7 +666,7 @@ def _feed_key(xml_url: str) -> str:
 
 
 async def _import_opml(
-    url: str, api_key: str, path: str, dry_run: bool
+    url: str, auth: AuthManager, path: str, dry_run: bool
 ) -> dict[str, Any]:
     """Import OPML subscriptions as Subscription facts (idempotent on
     xml_url: existing subscriptions are skipped, so re-import is safe)."""
@@ -663,7 +677,7 @@ async def _import_opml(
         raise CliError(f"cannot parse OPML: {e}") from e
 
     existing: set[Any] = set()
-    api = SemanticAPI(url, AuthManager(api_key=api_key))
+    api = SemanticAPI(url, auth)
     if not dry_run:
         # idempotency probe: page through existing Subscription facts
         start = 0
@@ -828,9 +842,9 @@ def _cmd_register(args: argparse.Namespace) -> int:
 
     if resource == "provider":
         payload = provider_payload(args)
-        url, api_key = _resolve_connection(args)
+        url, auth = _resolve_principal(args)
         try:
-            result = asyncio.run(_register_provider(url, api_key, payload))
+            result = asyncio.run(_register_provider(url, auth, payload))
         except ValidationError as e:
             raise CliError(f"invalid registration payload: {e}") from e
         print(json.dumps(result, indent=2))
@@ -838,10 +852,10 @@ def _cmd_register(args: argparse.Namespace) -> int:
 
     if resource == "account":
         payload = account_payload(args)
-        url, api_key = _resolve_connection(args)
+        url, auth = _resolve_principal(args)
         try:
             result = asyncio.run(
-                _register_account(url, api_key, args.provider, payload)
+                _register_account(url, auth, args.provider, payload)
             )
         except ValidationError as e:
             raise CliError(f"invalid account payload: {e}") from e
@@ -906,14 +920,14 @@ def _cmd_list(args: argparse.Namespace) -> int:
     resource = args.resource
 
     if resource == "accounts":
-        url, api_key = _resolve_connection(args)
-        accounts = asyncio.run(_list_accounts(url, api_key, args.provider))
+        url, auth = _resolve_principal(args)
+        accounts = asyncio.run(_list_accounts(url, auth, args.provider))
         print(json.dumps({"accounts": accounts, "count": len(accounts)}, indent=2))
         return 0
 
     if resource == "providers":
-        url, api_key = _resolve_connection(args)
-        providers = asyncio.run(ProviderAPI(url, AuthManager(api_key=api_key)).list())
+        url, auth = _resolve_principal(args)
+        providers = asyncio.run(ProviderAPI(url, auth).list())
         print(json.dumps({"providers": providers, "count": len(providers)}, indent=2))
         return 0
 
@@ -947,8 +961,8 @@ def _cmd_list(args: argparse.Namespace) -> int:
         return 0
 
     if resource == "runs":
-        url, api_key = _resolve_connection(args)
-        api = ProviderAPI(url, AuthManager(api_key=api_key))
+        url, auth = _resolve_principal(args)
+        api = ProviderAPI(url, auth)
         runs = asyncio.run(api.list_runs(
             args.provider,
             account_id=args.account,
@@ -991,18 +1005,14 @@ def _cmd_show(args: argparse.Namespace) -> int:
     resource = args.resource
 
     if resource == "provider":
-        url, api_key = _resolve_connection(args)
-        result = asyncio.run(
-            ProviderAPI(url, AuthManager(api_key=api_key)).get(args.name)
-        )
+        url, auth = _resolve_principal(args)
+        result = asyncio.run(ProviderAPI(url, auth).get(args.name))
         print(json.dumps(result, indent=2))
         return 0
 
     if resource == "run":
-        url, api_key = _resolve_connection(args)
-        result = asyncio.run(
-            ProviderAPI(url, AuthManager(api_key=api_key)).get_run(args.id)
-        )
+        url, auth = _resolve_principal(args)
+        result = asyncio.run(ProviderAPI(url, auth).get_run(args.id))
         print(json.dumps(result, indent=2))
         return 0
 
@@ -1018,8 +1028,8 @@ def _cmd_show(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
-    url, api_key = _resolve_connection(args)
-    result = asyncio.run(_account_action(url, api_key, args.provider, args, "verify"))
+    url, auth = _resolve_principal(args)
+    result = asyncio.run(_account_action(url, auth, args.provider, args, "verify"))
     print(json.dumps(result, indent=2))
     return 0
 
@@ -1028,8 +1038,8 @@ def _cmd_remove(args: argparse.Namespace) -> int:
     resource = args.resource
 
     if resource == "account":
-        url, api_key = _resolve_connection(args)
-        result = asyncio.run(_account_action(url, api_key, args.provider, args, "remove"))
+        url, auth = _resolve_principal(args)
+        result = asyncio.run(_account_action(url, auth, args.provider, args, "remove"))
         print(json.dumps(result, indent=2))
         return 0
 
@@ -1062,21 +1072,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
     resource = args.resource
 
     if resource == "account":
-        url, api_key = _resolve_connection(args)
-        result = asyncio.run(_account_action(url, api_key, args.provider, args, "run"))
+        url, auth = _resolve_principal(args)
+        result = asyncio.run(_account_action(url, auth, args.provider, args, "run"))
         print(json.dumps(result, indent=2))
         return 0
 
     if resource == "provider":
-        url, api_key = _resolve_connection(args)
-        api = ProviderAPI(url, AuthManager(api_key=api_key))
+        url, auth = _resolve_principal(args)
+        api = ProviderAPI(url, auth)
         result = asyncio.run(api.run(getattr(args, "name", "")))
         print(json.dumps(result, indent=2))
         return 0
 
     if resource == "providers":
-        url, api_key = _resolve_connection(args)
-        api = ProviderAPI(url, AuthManager(api_key=api_key))
+        url, auth = _resolve_principal(args)
+        api = ProviderAPI(url, auth)
         result = asyncio.run(api.run_due())
         print(json.dumps(result, indent=2))
         return 0
@@ -1099,8 +1109,8 @@ def _cmd_edit(args: argparse.Namespace) -> int:
         return 0
 
     if resource == "account":
-        url, api_key = _resolve_connection(args)
-        api = AccountAPI(url, AuthManager(api_key=api_key))
+        url, auth = _resolve_principal(args)
+        api = AccountAPI(url, auth)
         account_id = asyncio.run(_resolve_account_target(api, args.provider, args))
         fields: dict[str, Any] = {}
         if args.new_label:
@@ -1190,34 +1200,34 @@ def _cmd_track(args: argparse.Namespace) -> int:
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
-    url, api_key = _resolve_connection(args)
-    result = asyncio.run(_import_opml(url, api_key, args.file, args.dry_run))
+    url, auth = _resolve_principal(args)
+    result = asyncio.run(_import_opml(url, auth, args.file, args.dry_run))
     print(json.dumps(result, indent=2))
     return 0
 
 
-async def _register_provider(url: str, api_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def _register_provider(url: str, auth: AuthManager, payload: dict[str, Any]) -> dict[str, Any]:
     """Send the registration request to the server."""
-    api = ProviderAPI(url, AuthManager(api_key=api_key))
+    api = ProviderAPI(url, auth)
     return await api.register(RegisterProviderRequest(**payload))
 
 
-async def _register_account(url: str, api_key: str, provider: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def _register_account(url: str, auth: AuthManager, provider: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Send the account registration request to the server (RFC-012)."""
-    api = AccountAPI(url, AuthManager(api_key=api_key))
+    api = AccountAPI(url, auth)
     return await api.register(provider, RegisterAccountRequest(**payload))
 
 
-async def _list_accounts(url: str, api_key: str, provider: str) -> list[dict[str, Any]]:
-    api = AccountAPI(url, AuthManager(api_key=api_key))
+async def _list_accounts(url: str, auth: AuthManager, provider: str) -> "list[dict[str, Any]]":
+    api = AccountAPI(url, auth)
     return await api.list(provider)
 
 
 async def _account_action(
-    url: str, api_key: str, provider: str, args: argparse.Namespace, action: str
+    url: str, auth: AuthManager, provider: str, args: argparse.Namespace, action: str
 ) -> dict[str, Any] | None:
     """Resolve the account target and perform show/verify/remove/run."""
-    api = AccountAPI(url, AuthManager(api_key=api_key))
+    api = AccountAPI(url, auth)
     account_id = await _resolve_account_target(api, provider, args)
     if action == "show":
         return await api.get(provider, account_id)
