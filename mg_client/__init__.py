@@ -6,7 +6,9 @@ Main classes:
     - MemoGardenClient: Async HTTP client with authentication
     - SyncMemoGardenClient: Synchronous wrapper for non-async contexts
     - SemanticAPI: Wrapper for /mg endpoint operations
-    - AuthManager: JWT/API key handling
+    - OperatorAPI: identity, keys, grants, password (JWT-governed surface)
+    - OperatorReadsAPI: triage/scopes/pending-review console reads
+    - AuthManager: API key (X-API-Key) and operator JWT (Bearer) handling
 
 Example:
     >>> from mg_client import MemoGardenClient
@@ -18,6 +20,8 @@ Example:
 """
 
 from mg_client.client import MemoGardenClient, SyncMemoGardenClient
+from mg_client.identity import OperatorAPI
+from mg_client.operators import OperatorReadsAPI
 from mg_client.semantic import SemanticAPI
 from mg_client.auth import AuthManager
 from mg_client.sse import SSESubscription, connect_sse, SSEEvent
@@ -37,6 +41,8 @@ __all__ = [
     "MemoGardenClient",
     "SyncMemoGardenClient",
     "SemanticAPI",
+    "OperatorAPI",
+    "OperatorReadsAPI",
     "AuthManager",
     "SSESubscription",
     "connect_sse",

@@ -96,6 +96,49 @@ class ProviderAPI:
         payload = request.model_dump(mode="json", by_alias=True, exclude_none=True)
         return await self._request("POST", self._endpoint, payload)
 
+    # ---- RFC-015 §5.3: Tier-2 provider operations ----
+
+    async def list(self) -> list[dict[str, Any]]:
+        """List registered providers with status (GET /api/v1/providers)."""
+        body = await self._request("GET", self._endpoint, {})
+        return body.get("providers", [])
+
+    async def get(self, name: str) -> dict[str, Any]:
+        """Fetch one provider manifest."""
+        return await self._request("GET", f"{self._endpoint}/{name}", {})
+
+    async def run(self, name: str) -> dict[str, Any]:
+        """Trigger runs for one provider, even if not due (202)."""
+        return await self._request("POST", f"{self._endpoint}/{name}/run", {})
+
+    async def run_due(self) -> dict[str, Any]:
+        """Run all due work — the heartbeat entry point, manual (202)."""
+        return await self._request("POST", f"{self._endpoint}/run", {})
+
+    async def list_runs(
+        self,
+        name: str,
+        account_id: str | None = None,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List recent runs for a provider, newest first (RFC-015 §3.2)."""
+        params: list[str] = []
+        if account_id is not None:
+            params.append(f"account_id={account_id}")
+        if status is not None:
+            params.append(f"status={status}")
+        if limit is not None:
+            params.append(f"limit={limit}")
+        query = "&".join(params)
+        path = f"{self._endpoint}/{name}/runs" + (f"?{query}" if query else "")
+        body = await self._request("GET", path, {})
+        return body.get("runs", [])
+
+    async def get_run(self, run_id: str) -> dict[str, Any]:
+        """Fetch a single run by id (GET /api/v1/runs/{id}, RFC-015 §3.2)."""
+        return await self._request("GET", f"{self.base_url}/api/v1/runs/{run_id}", {})
+
     async def _request(
         self,
         method: str,

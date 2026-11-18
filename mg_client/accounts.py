@@ -32,6 +32,23 @@ class RegisterAccountRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class UpdateAccountRequest(BaseModel):
+    """Payload for PATCH /api/v1/providers/{name}/accounts/{id} (RFC-015 §5.3).
+
+    platform/subject/credential_ref are immutable — remove and
+    re-register instead (RFC-012 §6.1). Config REPLACES the stored map
+    server-side (provider config overrides semantics unchanged).
+    """
+
+    label: str | None = Field(default=None, max_length=120)
+    status: str | None = Field(
+        default=None,
+        pattern=r"^(active|needs_reauth|revoked|disabled)$",
+    )
+    config: dict[str, Any] | None = None
+    interval: int | None = Field(default=None, ge=60)
+
+
 class AccountAPI:
     """Wrapper for the provider accounts API (/api/v1/providers/{name}/accounts).
 
@@ -78,6 +95,21 @@ class AccountAPI:
     async def remove(self, provider: str, account_id: str) -> None:
         """Delete the account binding (registry row only; HACM is untouched)."""
         await self._request("DELETE", self._endpoint(provider, f"/{account_id}"), {})
+
+    async def update(
+        self, provider: str, account_id: str, request: UpdateAccountRequest
+    ) -> dict[str, Any]:
+        """Update mutable account fields (RFC-015 §5.3: pause/reconfig from CLI).
+
+        Only explicitly-set fields are sent (populate_by_name keeps
+        omitted fields out of the PATCH).
+        """
+        payload = request.model_dump(
+            mode="json", exclude_none=True, exclude_unset=True
+        )
+        return await self._request(
+            "PATCH", self._endpoint(provider, f"/{account_id}"), payload
+        )
 
     async def _request(
         self,
