@@ -48,8 +48,12 @@ def save_session(url: str, access_token: str, user: dict[str, Any] | None = None
         "access_token": access_token,
         "user": user or {},
     }
-    path.write_text(json.dumps(payload, indent=2))
-    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    # Create with 0600 from the first byte — write-then-chmod leaves a
+    # window where the JWT is world-readable on the default umask.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(payload, indent=2))
+    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0600 (belt for pre-existing files)
     return path
 
 

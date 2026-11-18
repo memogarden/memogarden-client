@@ -42,6 +42,7 @@ import getpass
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from typing import Any
@@ -546,7 +547,8 @@ def _resolve_jwt_auth(args: argparse.Namespace) -> tuple[str, AuthManager]:
     operator session is issued by `login`, never assumed (RFC-010).
     """
     jwt, session_url = resolve_jwt(getattr(args, "jwt", None))
-    url = args.url or os.environ.get("MEMOGARDEN_URL") or session_url
+    url = (args.url or os.environ.get("MEMOGARDEN_URL")
+           or session_url or (load_session() or {}).get("url"))
     if not url:
         raise CliError("no API URL: use --url or set MEMOGARDEN_URL")
     if not jwt:
@@ -573,7 +575,7 @@ def _resolve_flexible_auth(args: argparse.Namespace) -> tuple[str, AuthManager]:
 
 async def _resolve_agent_id(api: OperatorAPI, reference: str) -> str:
     """Resolve an agent label to its entity uuid; pass uuids through."""
-    if reference.startswith("core_") or "-" in reference:
+    if _is_uuid_ref(reference):
         return reference
     for agent in await api.list_agents():
         if (agent.get("label") or "") == reference:
@@ -581,30 +583,49 @@ async def _resolve_agent_id(api: OperatorAPI, reference: str) -> str:
     raise CliError(f"no agent with label '{reference}' — see `memogarden list agents`")
 
 
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _is_uuid_ref(ref: str) -> bool:
+    """True for bare or core_-prefixed uuids (pass-through, no lookup)."""
+    return _UUID_RE.match(ref) is not None or (
+        ref.startswith("core_") and _UUID_RE.match(ref.removeprefix("core_")) is not None
+    )
+
+
 async def _resolve_scope_refs(reads: OperatorReadsAPI, refs: list[str]) -> list[str]:
     """Resolve scope references (label/alias/uuid) to plain uuids client-side.
 
-    Uses the operator's scopes overview so labels match what the console
-    shows; uuids (prefixed or bare) pass through untouched.
+    Uuid-shaped refs pass through locally — the scopes overview is
+    JWT-only, so an agent key on enter/leave/relabel must not need it.
+    Label/alias refs use the overview; without an operator session the
+    error says exactly that instead of a server 401.
     """
-    overview = await reads.scopes_overview()
-    scopes = overview.get("scopes", [])
-    resolved: list[str] = []
-    for ref in refs:
-        label = _BUILTIN_SCOPE_ALIASES.get(ref, ref)
-        match = None
-        for scope in scopes:
-            scope_label = scope.get("label") or (scope.get("data") or {}).get("label")
-            scope_uuid = scope.get("uuid", "")
-            if ref in (scope_uuid, scope_uuid.removeprefix("core_")) or scope_label == label:
-                match = scope_uuid
-                break
-        if match is None:
-            raise CliError(
-                f"unknown scope '{ref}' — see `memogarden list scopes` "
-                "(labels, builtin aliases, or uuids)"
-            )
-        resolved.append(match.removeprefix("core_"))
+    local = [ref for ref in refs if _is_uuid_ref(ref)]
+    named = [ref for ref in refs if not _is_uuid_ref(ref)]
+    resolved: list[str] = [ref.removeprefix("core_") for ref in local]
+
+    if named:
+        overview = await reads.scopes_overview()
+        scopes = overview.get("scopes", [])
+        for ref in named:
+            label = _BUILTIN_SCOPE_ALIASES.get(ref, ref)
+            match = None
+            for scope in scopes:
+                scope_label = scope.get("label") or (scope.get("data") or {}).get("label")
+                scope_uuid = scope.get("uuid", "")
+                if scope_label == label or ref in (scope_uuid, scope_uuid.removeprefix("core_")):
+                    match = scope_uuid
+                    break
+            if match is None:
+                raise CliError(
+                    f"unknown scope '{ref}' — see `memogarden list scopes` "
+                    "(labels need an operator session; pass the scope uuid "
+                    "or run `memogarden login`)"
+                )
+            resolved.append(match.removeprefix("core_"))
     return resolved
 
 
@@ -1281,6 +1302,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except MemoGardenClientError as e:
         print(f"error: {e}", file=sys.stderr)
+        return 1
+    except ValidationError as e:
+        print(f"error: invalid input: {e}", file=sys.stderr)
         return 1
 
 
