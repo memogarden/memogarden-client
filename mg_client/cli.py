@@ -666,7 +666,7 @@ def _feed_key(xml_url: str) -> str:
 
 
 async def _import_opml(
-    url: str, auth: AuthManager, path: str, dry_run: bool
+    url: str, auth: "AuthManager | str", path: str, dry_run: bool
 ) -> dict[str, Any]:
     """Import OPML subscriptions as Subscription facts (idempotent on
     xml_url: existing subscriptions are skipped, so re-import is safe)."""
@@ -677,7 +677,7 @@ async def _import_opml(
         raise CliError(f"cannot parse OPML: {e}") from e
 
     existing: set[Any] = set()
-    api = SemanticAPI(url, auth)
+    api = SemanticAPI(url, _coerce_auth(auth))
     if not dry_run:
         # idempotency probe: page through existing Subscription facts
         start = 0
@@ -1206,28 +1206,33 @@ def _cmd_import(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _register_provider(url: str, auth: AuthManager, payload: dict[str, Any]) -> dict[str, Any]:
+def _coerce_auth(auth: "AuthManager | str") -> AuthManager:
+    """Accept a raw mg_sk_ key (historical helper signature) or AuthManager."""
+    return auth if isinstance(auth, AuthManager) else AuthManager(api_key=auth)
+
+
+async def _register_provider(url: str, auth: "AuthManager | str", payload: dict[str, Any]) -> dict[str, Any]:
     """Send the registration request to the server."""
-    api = ProviderAPI(url, auth)
+    api = ProviderAPI(url, _coerce_auth(auth))
     return await api.register(RegisterProviderRequest(**payload))
 
 
-async def _register_account(url: str, auth: AuthManager, provider: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def _register_account(url: str, auth: "AuthManager | str", provider: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Send the account registration request to the server (RFC-012)."""
-    api = AccountAPI(url, auth)
+    api = AccountAPI(url, _coerce_auth(auth))
     return await api.register(provider, RegisterAccountRequest(**payload))
 
 
-async def _list_accounts(url: str, auth: AuthManager, provider: str) -> "list[dict[str, Any]]":
-    api = AccountAPI(url, auth)
+async def _list_accounts(url: str, auth: "AuthManager | str", provider: str) -> "list[dict[str, Any]]":
+    api = AccountAPI(url, _coerce_auth(auth))
     return await api.list(provider)
 
 
 async def _account_action(
-    url: str, auth: AuthManager, provider: str, args: argparse.Namespace, action: str
+    url: str, auth: "AuthManager | str", provider: str, args: argparse.Namespace, action: str
 ) -> dict[str, Any] | None:
     """Resolve the account target and perform show/verify/remove/run."""
-    api = AccountAPI(url, auth)
+    api = AccountAPI(url, _coerce_auth(auth))
     account_id = await _resolve_account_target(api, provider, args)
     if action == "show":
         return await api.get(provider, account_id)
