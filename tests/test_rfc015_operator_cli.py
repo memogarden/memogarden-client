@@ -418,6 +418,60 @@ class TestCliVerbs:
         assert body == {"status": "disabled", "interval": 3540,
                         "config": {"batch_limit": 2500}}
 
+    def _edit_account_policy_body(self, monkeypatch, tmp_path, flags):
+        """Run `edit account` with the given policy flags; return the PATCH body."""
+        monkeypatch.delenv("MEMOGARDEN_API_KEY", raising=False)
+        monkeypatch.setenv("MEMOGARDEN_JWT", "tok")
+        monkeypatch.setenv("MEMOGARDEN_URL", "http://localhost:8600")
+        monkeypatch.setenv("MEMOGARDEN_CONFIG_DIR", str(tmp_path / "cfg"))
+        bodies = []
+
+        def make_request():
+            async def request(self, method, url=None, **kwargs):
+                bodies.append((method, url, kwargs.get("json")))
+                if method == "GET" and url.endswith("/accounts"):
+                    response = _mock_response(200, {"accounts": [
+                        {"id": "acc-1", "label": "nyjc", "subject": "ny@jc.edu"}
+                    ]})
+                elif method == "PATCH":
+                    response = _mock_response(200, {"id": "acc-1"})
+                else:
+                    raise AssertionError(f"unexpected {method} {url}")
+                response.raise_for_status = Mock()
+                return response
+            return request
+
+        with patch("httpx.AsyncClient.request", new=make_request()):
+            code = main([
+                "edit", "account", "--provider", "gmail", "--label", "nyjc",
+            ] + flags)
+        assert code == 0
+        patch_calls = [(m, u, b) for m, u, b in bodies if m == "PATCH"]
+        assert len(patch_calls) == 1
+        return patch_calls[0][2]
+
+    def test_edit_account_default_scope_sends_policy(self, monkeypatch, tmp_path):
+        body = self._edit_account_policy_body(
+            monkeypatch, tmp_path, ["--default-scope", "NYJC"])
+        assert body == {"scope_policy": {"rules": [], "default": "NYJC"}}
+
+    def test_edit_account_default_scope_none_is_explicitly_unscoped(
+        self, monkeypatch, tmp_path
+    ):
+        body = self._edit_account_policy_body(
+            monkeypatch, tmp_path, ["--default-scope", "none"])
+        assert body == {"scope_policy": {"rules": [], "default": None}}
+
+    def test_edit_account_clear_scope_policy_sends_explicit_null(
+        self, monkeypatch, tmp_path
+    ):
+        """--clear-scope-policy must reach the wire as a JSON null (the
+        exclude_none regression guard — dropping the key would be a no-op
+        PATCH, not an override removal)."""
+        body = self._edit_account_policy_body(
+            monkeypatch, tmp_path, ["--clear-scope-policy"])
+        assert body == {"scope_policy": None}
+
     def test_relabel_amends_with_full_scope_set(self, monkeypatch, tmp_path):
         monkeypatch.setenv("MEMOGARDEN_CONFIG_DIR", str(tmp_path / "cfg"))
         monkeypatch.setenv("MEMOGARDEN_JWT", "tok")

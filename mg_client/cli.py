@@ -342,6 +342,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", action="append", metavar="KEY=VALUE",
         help="Config entry (replaces the stored map when given). Repeatable",
     )
+    scope_policy_group = edit_account.add_mutually_exclusive_group()
+    scope_policy_group.add_argument(
+        "--default-scope", metavar="SCOPE",
+        help="Per-account scope policy default (label, triage/personal "
+             "alias, or uuid); `none` = explicitly unscoped. REPLACES the "
+             "provider's scope policy for this account's runs (JWT-gated)",
+    )
+    scope_policy_group.add_argument(
+        "--clear-scope-policy", action="store_true",
+        help="Remove the per-account override — inherit the provider's "
+             "scope policy again (JWT-gated)",
+    )
 
     edit_scope = edit_sub.add_parser(
         "scope", help="Flip a scope's visibility (RFC-011 visibility addendum; JWT-gated)"
@@ -1138,9 +1150,19 @@ def _cmd_edit(args: argparse.Namespace) -> int:
         config = _kv_pairs(args.config)
         if config is not None:
             fields["config"] = config
+        # Per-account scope policy (RFC-011 §4.8 at account level): the
+        # default-scope case needs no rules — {"rules": [], "default": ref}.
+        # `none` sentinel = explicitly unscoped; --clear-scope-policy sends
+        # an explicit null (drop the override, inherit provider policy).
+        if args.default_scope:
+            default_ref = None if args.default_scope.lower() == "none" else args.default_scope
+            fields["scope_policy"] = {"rules": [], "default": default_ref}
+        elif args.clear_scope_policy:
+            fields["scope_policy"] = None
         if not fields:
             raise CliError(
-                "nothing to update: pass --new-label / --status / --interval / --config"
+                "nothing to update: pass --new-label / --status / --interval / "
+                "--config / --default-scope / --clear-scope-policy"
             )
         result = asyncio.run(
             api.update(args.provider, account_id, UpdateAccountRequest(**fields))

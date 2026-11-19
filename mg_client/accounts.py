@@ -38,6 +38,10 @@ class UpdateAccountRequest(BaseModel):
     platform/subject/credential_ref are immutable — remove and
     re-register instead (RFC-012 §6.1). Config REPLACES the stored map
     server-side (provider config overrides semantics unchanged).
+    `scope_policy` ({rules, default}, RFC-011 §4.8 shape) replaces the
+    whole per-account policy; an explicit None clears the override so the
+    account inherits the provider-level policy again. PATCHing this field
+    is operator-gated (JWT only) server-side.
     """
 
     label: str | None = Field(default=None, max_length=120)
@@ -46,6 +50,7 @@ class UpdateAccountRequest(BaseModel):
         pattern=r"^(active|needs_reauth|revoked|disabled)$",
     )
     config: dict[str, Any] | None = None
+    scope_policy: dict[str, Any] | None = None
     interval: int | None = Field(default=None, ge=60)
 
 
@@ -101,12 +106,13 @@ class AccountAPI:
     ) -> dict[str, Any]:
         """Update mutable account fields (RFC-015 §5.3: pause/reconfig from CLI).
 
-        Only explicitly-set fields are sent (populate_by_name keeps
-        omitted fields out of the PATCH).
+        Only explicitly-set fields are sent (exclude_unset keeps omitted
+        fields out of the PATCH). exclude_none is deliberately NOT used
+        here: an explicit scope_policy=None clears the per-account
+        override (inherit the provider policy again) and must reach the
+        server as a JSON null.
         """
-        payload = request.model_dump(
-            mode="json", exclude_none=True, exclude_unset=True
-        )
+        payload = request.model_dump(mode="json", exclude_unset=True)
         return await self._request(
             "PATCH", self._endpoint(provider, f"/{account_id}"), payload
         )
