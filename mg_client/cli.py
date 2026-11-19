@@ -68,7 +68,8 @@ _REQUIRED_FIELDS = ("name", "module", "class")
 _PROVIDER_PLATFORMS = {"gmail": "google"}
 
 # Builtin scope aliases (RFC-011 §4.1) — mirrors the server resolver.
-_BUILTIN_SCOPE_ALIASES = {"triage": "Triage / Untrusted", "private": "Private"}
+# "Personal" (renamed from "Private", 2026-11-19) — clean break, no legacy alias.
+_BUILTIN_SCOPE_ALIASES = {"triage": "Triage / Untrusted", "personal": "Personal"}
 
 # JWT-gated command names (exact command key) — for the fail-fast message.
 _SESSION_HINT = (
