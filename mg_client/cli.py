@@ -214,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     register_scope.add_argument("--name", required=True, help="Scope label, e.g. Finances")
     register_scope.add_argument("--description", help="What the scope means")
+    register_scope.add_argument(
+        "--visibility", choices=["private", "public"], default="private",
+        help="public = items readable from any frame, no grant needed "
+             "(RFC-011 visibility addendum; default: private)",
+    )
 
     register_grant = register_sub.add_parser(
         "grant", help="Issue a scope grant (POST /grants; JWT-gated, RFC-011 §6)"
@@ -240,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     list_sub.add_parser("providers", help="List registered providers")
     list_sub.add_parser("agents", help="List minted agents (JWT-gated)")
     list_sub.add_parser("keys", help="List API keys (JWT-gated)")
-    list_sub.add_parser("scopes", help="List scopes with item counts (JWT-gated)")
+    list_sub.add_parser("scopes", help="List scopes with item counts + visibility (JWT-gated)")
 
     list_grants = list_sub.add_parser("grants", help="List grants for a key or agent")
     grants_principal = list_grants.add_mutually_exclusive_group(required=True)
@@ -336,6 +341,16 @@ def build_parser() -> argparse.ArgumentParser:
     edit_account.add_argument(
         "--config", action="append", metavar="KEY=VALUE",
         help="Config entry (replaces the stored map when given). Repeatable",
+    )
+
+    edit_scope = edit_sub.add_parser(
+        "scope", help="Flip a scope's visibility (RFC-011 visibility addendum; JWT-gated)"
+    )
+    edit_scope.add_argument("--name", required=True, help="Scope label, builtin alias, or uuid")
+    edit_scope.add_argument(
+        "--visibility", choices=["private", "public"], required=True,
+        help="public = items readable from any frame, no grant needed "
+             "(most permissive label wins; entry still needs its grant)",
     )
 
     remove_parser = sub.add_parser("remove", help="Remove a resource")
@@ -892,7 +907,7 @@ def _cmd_register(args: argparse.Namespace) -> int:
     if resource == "scope":
         url, auth = _resolve_jwt_auth(args)
         semantic = SemanticAPI(url, auth)
-        data: dict[str, Any] = {"label": args.name}
+        data: dict[str, Any] = {"label": args.name, "visibility": args.visibility}
         if args.description:
             data["description"] = args.description
         result = asyncio.run(semantic.create_entity("Scope", data=data))
@@ -1129,6 +1144,17 @@ def _cmd_edit(args: argparse.Namespace) -> int:
             )
         result = asyncio.run(
             api.update(args.provider, account_id, UpdateAccountRequest(**fields))
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if resource == "scope":
+        url, auth = _resolve_jwt_auth(args)
+        semantic = SemanticAPI(url, auth)
+        reads = OperatorReadsAPI(url, auth)
+        (scope_uuid,) = asyncio.run(_resolve_scope_refs(reads, [args.name]))
+        result = asyncio.run(
+            semantic.edit(scope_uuid, set_fields={"visibility": args.visibility})
         )
         print(json.dumps(result, indent=2))
         return 0

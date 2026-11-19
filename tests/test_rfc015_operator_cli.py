@@ -489,3 +489,93 @@ class TestCliVerbs:
         out = capsys.readouterr().out
         assert "Triage / Untrusted" in out
         assert '"fact_count": 3' in out
+
+    # ------------------------------------------------------------------
+    # Scope visibility (RFC-011 visibility addendum): register knob,
+    # edit flip, overview passthrough.
+    # ------------------------------------------------------------------
+
+    def _patched_request(self, capture, responder):
+        def make_request():
+            # httpx invokes request() with explicit kwargs (content=, json=, …)
+            # — accept everything and pull out what the assertions need.
+            async def request(self, *args, **kwargs):
+                method = args[0] if args else kwargs.get("method")
+                url = args[1] if len(args) > 1 else kwargs.get("url")
+                json_body = kwargs.get("json")
+                if json_body is not None:
+                    capture.append((method, url, json_body))
+                body = responder(url, json_body)
+                response = _mock_response(200, body)
+                response.raise_for_status = Mock()
+                return response
+            return request
+        return make_request
+
+    def test_register_scope_visibility_defaults_private(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MEMOGARDEN_CONFIG_DIR", str(tmp_path / "cfg"))
+        monkeypatch.setenv("MEMOGARDEN_JWT", "tok")
+        monkeypatch.setenv("MEMOGARDEN_URL", "http://localhost:8600")
+        capture = []
+
+        def responder(url, body):
+            return {"ok": True, "actor": "core_op", "result": {"uuid": "core_new"}, "timestamp": "2026-11-19T00:00:00Z"}
+
+        with patch("httpx.AsyncClient.request", new=self._patched_request(capture, responder)()):
+            code = main(["register", "scope", "--name", "Household"])
+        assert code == 0
+        creates = [b for _, u, b in capture if u.endswith("/mg") and b.get("op") == "create"]
+        assert creates[0]["data"]["visibility"] == "private"
+
+    def test_register_scope_visibility_public(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MEMOGARDEN_CONFIG_DIR", str(tmp_path / "cfg"))
+        monkeypatch.setenv("MEMOGARDEN_JWT", "tok")
+        monkeypatch.setenv("MEMOGARDEN_URL", "http://localhost:8600")
+        capture = []
+
+        def responder(url, body):
+            return {"ok": True, "actor": "core_op", "result": {"uuid": "core_new"}, "timestamp": "2026-11-19T00:00:00Z"}
+
+        with patch("httpx.AsyncClient.request", new=self._patched_request(capture, responder)()):
+            code = main(["register", "scope", "--name", "Household", "--visibility", "public"])
+        assert code == 0
+        creates = [b for _, u, b in capture if u.endswith("/mg") and b.get("op") == "create"]
+        assert creates[0]["data"]["visibility"] == "public"
+
+    def test_edit_scope_flips_visibility(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MEMOGARDEN_CONFIG_DIR", str(tmp_path / "cfg"))
+        monkeypatch.setenv("MEMOGARDEN_JWT", "tok")
+        monkeypatch.setenv("MEMOGARDEN_URL", "http://localhost:8600")
+        capture = []
+
+        def responder(url, body):
+            if str(url).endswith("/api/v1/scopes/overview"):
+                return {"scopes": [{"uuid": "core_h1", "label": "Household",
+                                    "visibility": "private"}]}
+            return {"ok": True, "actor": "core_op", "result": {}, "timestamp": "2026-11-19T00:00:00Z"}
+
+        with patch("httpx.AsyncClient.request", new=self._patched_request(capture, responder)()):
+            code = main(["edit", "scope", "--name", "Household",
+                         "--visibility", "public"])
+        assert code == 0
+        edits = [b for _, u, b in capture if u.endswith("/mg") and b.get("op") == "edit"]
+        assert edits[0]["target"] == "h1"  # resolver strips the core_ prefix (DB convention)
+        assert edits[0]["set"] == {"visibility": "public"}
+
+    def test_edit_scope_unknown_name_fails(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MEMOGARDEN_CONFIG_DIR", str(tmp_path / "cfg"))
+        monkeypatch.setenv("MEMOGARDEN_JWT", "tok")
+        monkeypatch.setenv("MEMOGARDEN_URL", "http://localhost:8600")
+
+        def make_request():
+            async def request(self, method, url=None, **kwargs):
+                body = {"scopes": []}
+                response = _mock_response(200, body)
+                response.raise_for_status = Mock()
+                return response
+            return request
+
+        with patch("httpx.AsyncClient.request", new=make_request()):
+            assert main(["edit", "scope", "--name", "Nope",
+                         "--visibility", "public"]) == 1
+            assert "unknown scope 'Nope'" in capsys.readouterr().err
