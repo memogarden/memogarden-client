@@ -77,6 +77,7 @@ git -C ~/memogarden/memogarden-system worktree add ~/wt/memogarden/memogarden-sy
 git -C ~/memogarden/memogarden-api worktree add ~/wt/memogarden/memogarden-api -b feat/<slug>
 ln -s ~/memogarden/memogarden-utils ~/wt/memogarden/memogarden-utils   # unmodified deps
 ln -s ~/memogarden/scripts ~/wt/memogarden/scripts                     # run_tests.sh needs ../scripts/test_entrypoint.sh
+ln -s ~/memogarden/schemas ~/wt/memogarden/schemas                     # schemas/ moved to the root repo (2026-11); system/schemas.py walks up to <workspace>/schemas/sql
 awt register --path <wt> --task "<task>" --agent zcode
 ```
 
